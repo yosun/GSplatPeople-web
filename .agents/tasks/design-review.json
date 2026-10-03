@@ -1,0 +1,111 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "counts": { "HIGH": 0, "MEDIUM": 3, "NIT": 10 },
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "MEDIUM",
+      "title": "PlayCanvas rejection rationale (per-stage timing) is false for playcanvas@2.23.0; 3.3 contradicts 3.4",
+      "location": "design 2, 3.1 (C2), 3.2 (PlayCanvas row), 3.3 (reason 1, score table), 16.4 F1",
+      "problem": "The design says 'C1 and C2 decide it' and that a library's internal passes cannot be timed per stage. playcanvas@2.23.0 WebgpuGraphicsDevice.setupTimeStampWrites(passDesc, name) is applied to render passes (line 824) and compute passes (line 864), and WebgpuGpuProfiler keeps a 1024-slot timestamp set keyed by pass name. 3.3 also says the deformer would have to run as an engine Compute, while 3.4 says the deformer takes any GPUDevice and could run on another engine's device. What is engine-owned is the read side: GSplatStreams creates every stream as a Texture, so the handoff needs a storage-buffer-to-texture pass (this supports C1 = 1). With C2 = 2 the totals are 20 vs 19 of 24, a near tie, and the spike that could resolve it is deferred until after the renderer is written. Verified in source: PlayCanvas has a GPU ComputeRadixSort (G2 holds). Not verified: whether its gsplat passes carry distinct names.",
+      "fix": "Pick one and correct the text either way. (1) Keep in-house: rewrite C2 and 3.3 reason 1 to the true facts (PlayCanvas times its own named passes; our reasons are one encoder with a fixed 10-slot schema we own, an exact sort checkable against Array.sort, and no per-frame buffer-to-texture conversion or GSplatFormat dependence), rescore PlayCanvas C2 as 2 (or '1-2, unverified'), and show 19 vs 20 as a near tie with the existing owner-approval note. (2) Or run the half-day spike at the start of M1, before project/sort/splat shaders are written, with go/no-go: adopt PlayCanvas if a Compute pass fills GSplatContainer stream textures from a DeformedSplatBuffers-shaped buffer with no CPU readback, gpuProfiler shows separate sort and draw timings, and the GPU sort path is active; else record the result in porting-notes.md and proceed in-house."
+    },
+    {
+      "id": "F2",
+      "severity": "MEDIUM",
+      "title": "Canvas-size rule clamps each dimension independently, distorting the image on this Retina machine",
+      "location": "design 6.7 (canvas size), NFR-2, 11.1",
+      "problem": "'Canvas size = CSS size x devicePixelRatio, each dimension clamped to 2048 px' is read as min(2048, w) and min(2048, h). At DPR 2 a 1440x900 CSS canvas is 2880x1800 device pixels, clamped to 2048x1800 (aspect 1.14 vs displayed 1.60); the browser stretches the buffer to the CSS box and the figure is about 1.4x too wide. The numeric tests cannot see it because the project pass uses the buffer W/H consistently. NFR-2 also says '1920x1080' without saying CSS pixels or drawing buffer; with the clamp and DPR 2 these differ.",
+      "fix": "Use a uniform scale: s = min(1, 2048 / max(cssW*dpr, cssH*dpr)); width = max(1, round(cssW*dpr*s)); height = max(1, round(cssH*dpr*s)); projection aspect = width/height. Add a Playwright check in M1 (viewport 1600x900, deviceScaleFactor 2, assert |canvas.width/canvas.height - 1600/900| < 0.01). Define NFR-2's resolution as the drawing-buffer size (1920x1080) and give the benchmark a ?res=1920x1080 override."
+    },
+    {
+      "id": "F3",
+      "severity": "MEDIUM",
+      "title": "No concrete procedure for the performance and per-stage profiling deliverable",
+      "location": "design 1.3 (NFR-2), 11.1, 11.2, 12.4, 13 (M1, M7), A5",
+      "problem": "The profiler is well specified but the measurement is not: no hook or script runs N frames and returns per-stage and frame statistics (the final timings table would be read off the panel by hand); no conditions are given (headed or headless, buffer size, warm-up, frame count, clip, camera, statistic); FPS is capped by display refresh so it cannot show headroom; the M0 smoke test only checks 'adapter present' so a fallback (software) adapter would pass parity and give meaningless timings; it is not stated that timestampWrites was verified on both a compute and a render pass on this GPU; and A5's '260,000 at interactive rates' has no way to be measured (synthetic has about 2,000 Gaussians, the real character 40,000).",
+      "fix": "Add a verify:bench step to tools/verify/browser-checks.ts: hook __gsplat.bench({warmup:120, frames:600}) returning per-stage median and p95 GPU ms (only frames in which the stage ran), CPU anim and encode ms, rAF interval distribution, and adapter vendor/architecture/description/isFallbackAdapter. Conditions: headed Chrome, deviceScaleFactor 1, viewport 1920x1080, first clip playing, default camera, deformation on; record machine, Chrome version and date. The M0 smoke test asserts isFallbackAdapter === false, vendor 'apple', and a plausible non-zero timestamp delta for one compute pass and one render pass. Report headroom (16.7 ms minus GPU stage sum) next to FPS. For A5 add build-synthetic --count 262144 (tile and jitter the real cloud) and measure, or delete the claim."
+    },
+    {
+      "id": "F4",
+      "severity": "NIT",
+      "title": "Keyboard handlers conflict with focused controls",
+      "location": "design 6.7, 9.2",
+      "problem": "Global Space (play) and arrow-key orbit also act on a focused button, select or range input (double toggle, scrubber moves while orbiting).",
+      "fix": "State that the global handlers ignore events whose target is button, select or input, and that R is ignored while typing."
+    },
+    {
+      "id": "F5",
+      "severity": "NIT",
+      "title": "Skeleton overlay hard-wired to 27 bones and 864 bytes",
+      "location": "design 3.4 (updateSkeleton), 6.6, 9.3",
+      "problem": "The bone count is jointCount minus root count: 27 for the LHM rig, 2 for the synthetic chain.",
+      "fix": "Size the segments buffer from the rig: Float32Array(4 * 2 * boneCount)."
+    },
+    {
+      "id": "F6",
+      "severity": "NIT",
+      "title": "Binary readers: short files and unchecked fields leave an uncaught-exception path",
+      "location": "design 7.2, 7.3, 7.4, 10.1, acceptance 16",
+      "problem": "A file shorter than its header reaches the magic read first and throws RangeError, not AssetError. flags and reserved words are never checked; binding.format has no rule; parsed vertex, triangle and joint counts are not compared with the manifest; GLB triangle indices are not checked against vertexCount (an out-of-range index reads zero on the GPU and silently deforms the wrong surface); bbox meaning (centres, not extents) is unstated although the default camera uses it.",
+      "fix": "Check byteLength >= header size first and raise *_SIZE_MISMATCH; reject non-zero flags and reserved words; require binding.format === 'GSRG/1'; compare parsed V/T/J with the manifest (MANIFEST_INVALID) and require max(index) < vertexCount (GLB_MALFORMED); define bboxMin/Max as min/max of Gaussian centres."
+    },
+    {
+      "id": "F7",
+      "severity": "NIT",
+      "title": "Acceptance 12 can pass vacuously",
+      "location": "design 1.4 #12, 4.3",
+      "problem": "Skin matrices at t = 0 and t = duration are compared through a sampler that wraps t mod duration, so t = duration is t = 0.",
+      "fix": "Compare the first and last keyframe values of every channel, or sample with wrapping disabled."
+    },
+    {
+      "id": "F8",
+      "severity": "NIT",
+      "title": "M0 exit lists an acceptance item its tooling cannot satisfy",
+      "location": "design 13 (M0), 1.4 #20",
+      "problem": "#20 includes the baker failing with BAKE_PROXY_SCALE, but the baker arrives in M3.",
+      "fix": "Split #20 into 20a (validator, M0) and 20b (baker clause, M3)."
+    },
+    {
+      "id": "F9",
+      "severity": "NIT",
+      "title": "Vite configuration details the scripts need",
+      "location": "design 4.1, 12.4, 14",
+      "problem": "vite --config web/vite.config.ts run from the repo root uses cwd as root unless the config sets root. tests/*.browser.ts are outside web/, so the dev server needs server.fs.allow, and the production build served by vite preview needs import.meta.glob (a variable dynamic import() is not bundled). verify:browser does not say it builds first.",
+      "fix": "Set root to the web/ directory in vite.config.ts; set server.fs.allow to the repo root; load browser suites with import.meta.glob('../../../tests/*.browser.ts'); make verify:browser run vite build before vite preview."
+    },
+    {
+      "id": "F10",
+      "severity": "NIT",
+      "title": "README and reproducibility gaps",
+      "location": "design 14, 1.4 #18, 8.2",
+      "problem": "With --synthetic only, the default asset lhm500m-woman does not exist, so npm run dev fails with ASSET_FETCH_FAILED. Blender path is hard-coded while Chrome has CHROME_PATH. 'Clean clone' needs a git repository and a committed package-lock.json; this workspace is not a git repository.",
+      "fix": "README: say to open ?asset=synthetic after --synthetic; add a BLENDER env override; add git init and commit package-lock.json to the M0 scope."
+    },
+    {
+      "id": "F11",
+      "severity": "NIT",
+      "title": "Tolerance calibration uses 5 seeds, verification 20",
+      "location": "design 12.3.1",
+      "problem": "The gate has 25 % headroom, but the tail of 20 x 40,000 samples is larger than that of 5 x 40,000, so a correct shader can fail a verification seed.",
+      "fix": "Calibrate on seeds 101..120 so the sample sizes match."
+    },
+    {
+      "id": "F12",
+      "severity": "NIT",
+      "title": "The renderer has no analytic anchor",
+      "location": "design 1.4 #10, 12.3 J",
+      "problem": "The GPU project pass is compared with a float64 CPU EWA written from the same prose; a Jacobian sign error would match.",
+      "fix": "Add known-answer checks: an isotropic Gaussian of scale s on the optical axis at depth d has sigma_px = sqrt((fx*s/d)^2 + dilation); two Gaussians mirrored about the view axis give mirrored axes."
+    },
+    {
+      "id": "F13",
+      "severity": "NIT",
+      "title": "Small frame-loop details",
+      "location": "design 9.1, 9.3",
+      "problem": "toggled(deformOn) must be true on the first frame so the initial setSource happens; the rAF delta is not clamped, so a returning hidden tab jumps the animation.",
+      "fix": "Treat the first frame as a toggle; clamp dt to 100 ms; confirm in the M0 smoke test that timestamp-query can be requested on this adapter."
+    }
+  ],
+  "reviewDoc": "/Users/mbp16_2022_m1max/MyTests/GSplatPeople-web/.agents/tasks/design-review.md"
+}

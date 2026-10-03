@@ -1,0 +1,13 @@
+.scratch/
+node_modules/
+dist/
+.DS_Store
+# large downloaded/baked assets
+**/assets/download/**
+**/assets/baked/**
+web/public/assets/*.ply
+web/public/assets/*.sog
+web/public/assets/*.splat
+tools/**/*.ply
+tools/**/*.sog
+tools/**/*.splat
